@@ -1,15 +1,16 @@
+import { Todo } from "../models/todos.model";
 import express from "express";
-import { User } from "../models/user.model";
-import { Todos } from "../models/todos.model";
 import { asyncHandler } from "../utils/function";
+import { User } from "../models/user.model";
+import mongoose from "mongoose";
 import {
   allowedFieldsByRole,
   filterFields,
   TodoBody,
   TodoSearchBody,
-} from "../utils/interfaceHelper";
+} from "../helpers/todo.helper";
 
-export const createTodo = asyncHandler(
+export const addNewTodo = asyncHandler(
   async (
     req: express.Request<{}, {}, TodoBody>,
     res: express.Response
@@ -17,32 +18,39 @@ export const createTodo = asyncHandler(
     const { title, description, status, priority, assignedTo, dueDate } =
       req.body;
     const user = req.user?.userId;
-    const todosCreation = await Todos.create({
+    const currentUser = await User.findById(user);
+    let assignedUserId: string | undefined = currentUser?._id;
+    if (currentUser?.role.includes("admin")) {
+      assignedUserId = assignedTo;
+    }
+
+    const todoCreation = await Todo.create({
       title,
       description,
       status,
       priority,
-      assignedTo,
+      assignedTo: assignedUserId,
       assignedBy: user,
       dueDate,
     });
-    if (!todosCreation) {
+    if (todoCreation) {
+      return res.status(200).json({
+        message: "Todos has been created",
+        data: todoCreation,
+        status: 200,
+        error: null,
+      });
+    } else {
       return res.status(400).json({
         message: null,
         data: null,
         status: 400,
         error: "Sorry, the todos can not be added",
       });
-    } else {
-      return res.status(200).json({
-        message: "Todos has been created",
-        data: todosCreation,
-        status: 200,
-        error: null,
-      });
     }
   }
 );
+
 export const getAllTodos = asyncHandler(
   async (
     req: express.Request<{}, {}, TodoSearchBody>,
@@ -58,14 +66,12 @@ export const getAllTodos = asyncHandler(
         data: null,
       });
     }
-
     const page = req.body.page || 1;
-    console.log(page, "------page");
     const limit = req.body.limit || 10;
     const skip = (page - 1) * limit;
     const sortBy = req.body.sortBy || "createdAt";
     const sortOrder = req.body.sortOrder === "asc" ? 1 : -1;
-    const search = req.body.search;
+    const search = req.body.search || "";
 
     const searchFilter = search
       ? {
@@ -79,19 +85,15 @@ export const getAllTodos = asyncHandler(
           ],
         }
       : {};
-
-    // const matchStage =
-    //   userDetails?.role === "admin" ? {} : { assignedTo: userDetails?._id }
-    // ;
-
     const matchStage = {
       ...(userDetails?.role === "admin"
         ? {}
-        : { assignedTo: userDetails?._id }),
+        : { assignedTo: new mongoose.Types.ObjectId(userDetails?._id) }),
       ...searchFilter,
     };
 
-    const todosDetails = await Todos.aggregate([
+    console.log(matchStage);
+    const TodosDetails = await Todo.aggregate([
       {
         $match: matchStage,
       },
@@ -131,29 +133,23 @@ export const getAllTodos = asyncHandler(
       },
       {
         $lookup: {
-          from: "comments", // collection name in DB (lowercase plural)
+          from: "comments",
           localField: "_id",
           foreignField: "todoId",
-          as: "comments",
+          as: "Comments",
           pipeline: [
             {
-              // $project: {
-              //   title: 1,
-              //   description: 1,
-              //   todoId: 1,
-              // },
               $lookup: {
                 from: "users",
-                localField: "createdBy",
+                localField: "writtenBy",
                 foreignField: "_id",
                 as: "addedByDetails",
                 pipeline: [
                   {
                     $project: {
                       fullName: 1,
-                      role: 1,
                       userName: 1,
-                      email: 2,
+                      email: 1,
                     },
                   },
                 ],
@@ -191,9 +187,8 @@ export const getAllTodos = asyncHandler(
         $limit: limit,
       },
     ]);
-
-    const totalCount = await Todos.countDocuments(matchStage);
-    if (todosDetails.length === 0) {
+    const totalTodosDocuments = await Todo.countDocuments(matchStage);
+    if (TodosDetails.length === 0) {
       return res.status(200).json({
         message: "Sorry, no todos found",
         data: null,
@@ -203,33 +198,17 @@ export const getAllTodos = asyncHandler(
     } else {
       return res.status(200).json({
         message: "Todos details",
-        data: todosDetails,
+        data: TodosDetails,
         pagination: {
-          total: totalCount,
+          total: totalTodosDocuments,
           page,
           limit,
-          totalPages: Math.ceil(totalCount / limit),
+          totalPages: Math.ceil(totalTodosDocuments / limit),
         },
         error: null,
         status: 200,
       });
     }
-
-    // if (todosDetails.length > 0) {
-    //   return res.status(200).json({
-    //     message: "Todos details",
-    //     data: todosDetails,
-    //     error: null,
-    //     status: 200,
-    //   });
-    // } else {
-    //   return res.status(200).json({
-    //     message: null,
-    //     data: null,
-    //     error: "Sorry, no todos found",
-    //     status: 200,
-    //   });
-    // }
   }
 );
 
@@ -239,7 +218,7 @@ export const updateTodos = asyncHandler(
     res: express.Response
   ): Promise<express.Response> => {
     const user = req.user?.userId;
-    const { title, description, priority, status, dueDate } = req.body;
+    // const { title, description, priority, status, dueDate } = req.body;
     const userDetail = await User.findById(user);
     if (!userDetail) {
       return res.status(401).json({
@@ -260,14 +239,14 @@ export const updateTodos = asyncHandler(
 
     const allowedFields = allowedFieldsByRole[role];
     const updatedData = filterFields(req.body, allowedFields);
-    const todo = await Todos.findById(todoId);
+    const todo = await Todo.findById(todoId);
     if (!todo) {
       return res.status(404).json({ error: "Todo not found" });
     }
     if (userDetail?.role !== "admin" && todo.assignedTo !== user) {
       return res.status(403).json({ error: "Access Denied" });
     }
-    const updatedTodos = await Todos.findByIdAndUpdate(todoId, updatedData, {
+    const updatedTodos = await Todo.findByIdAndUpdate(todoId, updatedData, {
       new: true,
     });
     if (updatedTodos) {
@@ -287,170 +266,3 @@ export const updateTodos = asyncHandler(
     }
   }
 );
-
-export const updateCopy = asyncHandler(
-  async (
-    req: express.Request,
-    res: express.Response
-  ): Promise<express.Response> => {
-    const user = req.user?.userId;
-    const userDetails = await User.findById(user);
-    if (!userDetails) {
-      return res.status(401).json({
-        message: null,
-        error: "Sorry, no user found",
-        status: 401,
-        data: null,
-      });
-    }
-    const page = req.body.page || 1;
-    const limit = req.body.limit || 10;
-    const skip = (page - 1) * limit;
-    const sortBy = req.body.sortBy || "createdAt";
-    const sortOrder = req.body.sortOder === "asc" ? 1 : -1;
-    const search = req.body.search;
-
-    const searchFilter = search
-      ? {
-          $or: [
-            {
-              $title: { $regex: search, $options: "i" },
-            },
-            {
-              $description: { $regex: search, $options: "i" },
-            },
-          ],
-        }
-      : {};
-
-    const matchStage = {
-      ...(userDetails?.role === "admin"
-        ? {}
-        : { assignedTo: userDetails?._id }),
-      ...searchFilter,
-    };
-    const todosDetails = await Todos.aggregate([
-      {
-        $match: matchStage,
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "assginedTo",
-          foreignField: "_id",
-          as: "userDetails",
-          pipeline: [
-            {
-              $project: {
-                userName: 1,
-                fullName: 1,
-                email: 1,
-              },
-            },
-          ],
-        },
-      },
-      {
-        $lookup: {
-          from: "users",
-          localField: "assignedBy",
-          foreignField: "_id",
-          as: "adminDetails",
-          pipeline: [
-            {
-              $project: {
-                userName: 1,
-                fullName: 1,
-                email: 1,
-              },
-            },
-          ],
-        },
-      },
-      {
-        $lookup: {
-          from: "comments",
-          localField: "_id",
-          foreignField: "todoId",
-          as: "comments",
-          pipeline: [
-            {
-              $lookup: {
-                from: "users",
-                localField: "createdBy",
-                foreignField: "_id",
-                as: "addedByDetails",
-                pipeline: [
-                  {
-                    $project: {
-                      fullName: 1,
-                      role: 1,
-                      userName: 1,
-                      email: 2,
-                    },
-                  },
-                ],
-              },
-            },
-            {
-              $addFields: {
-                addbyDetails: {
-                  $first: "$addedByDetails",
-                },
-              },
-            },
-          ],
-        },
-      },
-      {
-        $addFields: {
-          userDetails: {
-            $first: "$userDetails",
-          },
-          adminDetails: {
-            $first: "$adminDetails",
-          },
-        },
-      },
-      {
-        $sort: {
-          [sortBy]: sortOrder,
-        },
-      },
-      {
-        $skip: skip,
-      },
-    ]);
-    const total = await Todos.countDocuments(matchStage);
-    if (todosDetails.length === 0) {
-      return res.status(200).json({
-        message: "Sorry, no todos found",
-        data: null,
-        error: null,
-        status: 200,
-      });
-    } else {
-      return res.status(200).json({
-        message: "Todo's details",
-        total: total,
-        page,
-        limit: limit,
-        totalPage: Math.ceil(total / limit),
-      });
-    }
-  }
-);
-
-export const allowedFieldsByRoles = {
-  admin: ["title", "description", "priority", "status", "duedate"],
-  user: ["title", "description"],
-};
-
-export const filterFieldsDetails = (data: any, allowedFields: string[]) => {
-  let filtered: any = {};
-  for (let key of allowedFields) {
-    if (data[key] !== undefined) {
-      filtered[key] = data[key];
-    }
-  }
-};
