@@ -1,6 +1,7 @@
 import express from "express";
 import { User } from "../models/user.model";
 import { Todos } from "../models/todos.model";
+import mongoose from "mongoose";
 import { asyncHandler } from "../utils/function";
 import {
   allowedFieldsByRole,
@@ -342,3 +343,59 @@ export const filterFieldsDetails = (data: any, allowedFields: string[]) => {
     }
   }
 };
+export const getTodosByDate = asyncHandler(
+  async (
+    req: express.Request<{}, {}, { startDate?: string; endDate?: string }>,
+    res: express.Response
+  ): Promise<express.Response> => {
+    const userId = req.user?.userId;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(401).json({
+        message: null,
+        error: "Unauthorized: User not found",
+        status: 401,
+        data: null,
+      });
+    }
+
+    const { startDate, endDate } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        message: null,
+        error: "Both startDate and endDate are required",
+        status: 400,
+        data: null,
+      });
+    }
+
+    const dateRangeFilter = {
+      dueDate: {
+        $gte: new Date(startDate),
+        $lte: new Date(endDate),
+      },
+    };
+
+    const roleFilter =
+      user.role === "admin"
+        ? {}
+        : { assignedTo: new mongoose.Types.ObjectId(user._id) };
+
+    const todos = await Todos.find({
+      ...roleFilter,
+      ...dateRangeFilter,
+    })
+      .populate("assignedTo", "fullName userName email")
+      .populate("assignedBy", "fullName userName email")
+      .sort({ dueDate: 1 });
+
+    return res.status(200).json({
+      message: "Todos by date",
+      data: todos,
+      error: null,
+      status: 200,
+    });
+  }
+);
