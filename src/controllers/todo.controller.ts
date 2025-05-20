@@ -1,16 +1,15 @@
-import { Todo } from "../models/todos.model";
 import express from "express";
-import { asyncHandler } from "../utils/function";
 import { User } from "../models/user.model";
-import mongoose from "mongoose";
+import { Todos } from "../models/todos.model";
+import { asyncHandler } from "../utils/function";
 import {
   allowedFieldsByRole,
   filterFields,
   TodoBody,
   TodoSearchBody,
-} from "../helpers/todo.helper";
+} from "../utils/interfaceHelper";
 
-export const addNewTodo = asyncHandler(
+export const createTodo = asyncHandler(
   async (
     req: express.Request<{}, {}, TodoBody>,
     res: express.Response
@@ -18,39 +17,32 @@ export const addNewTodo = asyncHandler(
     const { title, description, status, priority, assignedTo, dueDate } =
       req.body;
     const user = req.user?.userId;
-    const currentUser = await User.findById(user);
-    let assignedUserId: string | undefined = currentUser?._id;
-    if (currentUser?.role.includes("admin")) {
-      assignedUserId = assignedTo;
-    }
-
-    const todoCreation = await Todo.create({
+    const todosCreation = await Todos.create({
       title,
       description,
       status,
       priority,
-      assignedTo: assignedUserId,
+      assignedTo,
       assignedBy: user,
       dueDate,
     });
-    if (todoCreation) {
-      return res.status(200).json({
-        message: "Todos has been created",
-        data: todoCreation,
-        status: 200,
-        error: null,
-      });
-    } else {
+    if (!todosCreation) {
       return res.status(400).json({
         message: null,
         data: null,
         status: 400,
         error: "Sorry, the todos can not be added",
       });
+    } else {
+      return res.status(200).json({
+        message: "Todos has been created",
+        data: todosCreation,
+        status: 200,
+        error: null,
+      });
     }
   }
 );
-
 export const getAllTodos = asyncHandler(
   async (
     req: express.Request<{}, {}, TodoSearchBody>,
@@ -66,12 +58,14 @@ export const getAllTodos = asyncHandler(
         data: null,
       });
     }
+
     const page = req.body.page || 1;
+    console.log(page, "------page");
     const limit = req.body.limit || 10;
     const skip = (page - 1) * limit;
     const sortBy = req.body.sortBy || "createdAt";
     const sortOrder = req.body.sortOrder === "asc" ? 1 : -1;
-    const search = req.body.search || "";
+    const search = req.body.search;
 
     const searchFilter = search
       ? {
@@ -85,15 +79,19 @@ export const getAllTodos = asyncHandler(
           ],
         }
       : {};
+
+    // const matchStage =
+    //   userDetails?.role === "admin" ? {} : { assignedTo: userDetails?._id }
+    // ;
+
     const matchStage = {
       ...(userDetails?.role === "admin"
         ? {}
-        : { assignedTo: new mongoose.Types.ObjectId(userDetails?._id) }),
+        : { assignedTo: userDetails?._id }),
       ...searchFilter,
     };
 
-    console.log(matchStage);
-    const TodosDetails = await Todo.aggregate([
+    const todosDetails = await Todos.aggregate([
       {
         $match: matchStage,
       },
@@ -133,23 +131,29 @@ export const getAllTodos = asyncHandler(
       },
       {
         $lookup: {
-          from: "comments",
+          from: "comments", // collection name in DB (lowercase plural)
           localField: "_id",
           foreignField: "todoId",
-          as: "Comments",
+          as: "comments",
           pipeline: [
             {
+              // $project: {
+              //   title: 1,
+              //   description: 1,
+              //   todoId: 1,
+              // },
               $lookup: {
                 from: "users",
-                localField: "writtenBy",
+                localField: "createdBy",
                 foreignField: "_id",
                 as: "addedByDetails",
                 pipeline: [
                   {
                     $project: {
                       fullName: 1,
+                      role: 1,
                       userName: 1,
-                      email: 1,
+                      email: 2,
                     },
                   },
                 ],
@@ -187,8 +191,9 @@ export const getAllTodos = asyncHandler(
         $limit: limit,
       },
     ]);
-    const totalTodosDocuments = await Todo.countDocuments(matchStage);
-    if (TodosDetails.length === 0) {
+
+    const totalCount = await Todos.countDocuments(matchStage);
+    if (todosDetails.length === 0) {
       return res.status(200).json({
         message: "Sorry, no todos found",
         data: null,
@@ -198,17 +203,33 @@ export const getAllTodos = asyncHandler(
     } else {
       return res.status(200).json({
         message: "Todos details",
-        data: TodosDetails,
+        data: todosDetails,
         pagination: {
-          total: totalTodosDocuments,
+          total: totalCount,
           page,
           limit,
-          totalPages: Math.ceil(totalTodosDocuments / limit),
+          totalPages: Math.ceil(totalCount / limit),
         },
         error: null,
         status: 200,
       });
     }
+
+    // if (todosDetails.length > 0) {
+    //   return res.status(200).json({
+    //     message: "Todos details",
+    //     data: todosDetails,
+    //     error: null,
+    //     status: 200,
+    //   });
+    // } else {
+    //   return res.status(200).json({
+    //     message: null,
+    //     data: null,
+    //     error: "Sorry, no todos found",
+    //     status: 200,
+    //   });
+    // }
   }
 );
 
@@ -218,7 +239,7 @@ export const updateTodos = asyncHandler(
     res: express.Response
   ): Promise<express.Response> => {
     const user = req.user?.userId;
-    // const { title, description, priority, status, dueDate } = req.body;
+    const { title, description, priority, status, dueDate } = req.body;
     const userDetail = await User.findById(user);
     if (!userDetail) {
       return res.status(401).json({
@@ -239,14 +260,14 @@ export const updateTodos = asyncHandler(
 
     const allowedFields = allowedFieldsByRole[role];
     const updatedData = filterFields(req.body, allowedFields);
-    const todo = await Todo.findById(todoId);
+    const todo = await Todos.findById(todoId);
     if (!todo) {
       return res.status(404).json({ error: "Todo not found" });
     }
     if (userDetail?.role !== "admin" && todo.assignedTo !== user) {
       return res.status(403).json({ error: "Access Denied" });
     }
-    const updatedTodos = await Todo.findByIdAndUpdate(todoId, updatedData, {
+    const updatedTodos = await Todos.findByIdAndUpdate(todoId, updatedData, {
       new: true,
     });
     if (updatedTodos) {
@@ -266,3 +287,58 @@ export const updateTodos = asyncHandler(
     }
   }
 );
+
+export const addNewTodo = asyncHandler(
+  async (
+    req: express.Request<{}, {}, TodoBody>,
+    res: express.Response
+  ): Promise<express.Response> => {
+    const { title, description, status, priority, assignedTo, dueDate } =
+      req.body;
+    const user = req.user?.userId;
+    const currentUser = await User.findById(user);
+    let assignedUserId: string | undefined = currentUser?._id;
+    if (currentUser?.role.includes("admin")) {
+      assignedUserId = assignedTo;
+    }
+
+    const todoCreation = await Todos.create({
+      title,
+      description,
+      status,
+      priority,
+      assignedTo: assignedUserId,
+      assignedBy: user,
+      dueDate,
+    });
+    if (todoCreation) {
+      return res.status(200).json({
+        message: "Todos has been created",
+        data: todoCreation,
+        status: 200,
+        error: null,
+      });
+    } else {
+      return res.status(400).json({
+        message: null,
+        data: null,
+        status: 400,
+        error: "Sorry, the todos can not be added",
+      });
+    }
+  }
+);
+
+export const allowedFieldsByRoles = {
+  admin: ["title", "description", "priority", "status", "duedate"],
+  user: ["title", "description"],
+};
+
+export const filterFieldsDetails = (data: any, allowedFields: string[]) => {
+  let filtered: any = {};
+  for (let key of allowedFields) {
+    if (data[key] !== undefined) {
+      filtered[key] = data[key];
+    }
+  }
+};
