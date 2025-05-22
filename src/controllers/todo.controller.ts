@@ -9,6 +9,7 @@ import {
   TodoBody,
   TodoSearchBody,
 } from "../utils/interfaceHelper";
+import { sendEmailReminder } from "../utils/email.service";
 
 export const createTodo = asyncHandler(
   async (
@@ -18,28 +19,45 @@ export const createTodo = asyncHandler(
     const { title, description, status, priority, assignedTo, dueDate } =
       req.body;
     const user = req.user?.userId;
-    const todosCreation = await Todos.create({
+    const currentUser = await User.findById(user);
+    if (!currentUser) {
+      return res.status(401).json({
+        message: null,
+        error: "Unauthorized: User not found",
+        status: 401,
+        data: null,
+      });
+    }
+    let assignedUserId: mongoose.Types.ObjectId = new mongoose.Types.ObjectId(
+      currentUser._id
+    ); // 👈 Convert ObjectId to string
+
+    if (currentUser.role.includes("admin") && assignedTo) {
+      assignedUserId = assignedTo;
+    }
+    console.log(assignedUserId);
+    const todoCreation = await Todos.create({
       title,
       description,
       status,
       priority,
-      assignedTo,
+      assignedTo: assignedUserId,
       assignedBy: user,
       dueDate,
     });
-    if (!todosCreation) {
+    if (todoCreation) {
+      return res.status(200).json({
+        message: "Todos has been created",
+        data: todoCreation,
+        status: 200,
+        error: null,
+      });
+    } else {
       return res.status(400).json({
         message: null,
         data: null,
         status: 400,
         error: "Sorry, the todos can not be added",
-      });
-    } else {
-      return res.status(200).json({
-        message: "Todos has been created",
-        data: todosCreation,
-        status: 200,
-        error: null,
       });
     }
   }
@@ -399,3 +417,198 @@ export const getTodosByDate = asyncHandler(
     });
   }
 );
+
+export const deleteTodos = asyncHandler(
+  async (
+    req: express.Request<{ id: string }>,
+    res: express.Response
+  ): Promise<express.Response> => {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) {
+      return res.status(401).json({
+        status: 401,
+        message: null,
+        data: null,
+        error: "Unauthorized request.",
+      });
+    }
+    const todo = await Todos.findByIdAndDelete(id);
+    if (!todo) {
+      return res.status(404).json({
+        status: 404,
+        message: null,
+        data: null,
+        error: "No To-Do found for today or not authorized.",
+      });
+    }
+
+    return res.status(200).json({
+      status: 200,
+      message: "To-Do deleted successfully!",
+      data: null,
+      error: null,
+    });
+  }
+);
+
+export const updateTodosStatus = asyncHandler(
+  async (
+    req: express.Request<{ id: string }>,
+    res: express.Response
+  ): Promise<express.Response> => {
+    const { id } = req.params;
+
+    const updateTodosStatus = await Todos.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          status: "completed",
+        },
+      },
+      {
+        new: true,
+      }
+    );
+    if (updateTodosStatus) {
+      return res.status(200).json({
+        status: 200,
+        message: "To-Do marked as completed!",
+        data: updateTodosStatus,
+        error: null,
+      });
+    } else {
+      return res.status(500).json({
+        status: 500,
+        message: null,
+        data: null,
+        error: "Todo can not be updated",
+      });
+    }
+  }
+);
+
+export const updateTodosStatusToPending = asyncHandler(
+  async (
+    req: express.Request<{ id: string }>,
+    res: express.Response
+  ): Promise<express.Response> => {
+    const { id } = req.params;
+    const updateTodosStatus = await Todos.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          status: "pending",
+        },
+      },
+      {
+        new: true,
+      }
+    );
+    if (updateTodosStatus) {
+      return res.status(200).json({
+        status: 200,
+        message: "To-Do marked as completed!",
+        data: updateTodosStatus,
+        error: null,
+      });
+    } else {
+      return res.status(500).json({
+        status: 500,
+        message: null,
+        data: null,
+        error: "Todo can not be updated",
+      });
+    }
+  }
+);
+
+export const sendReminder = asyncHandler(
+  async (
+    req: express.Request<{ id: string }>,
+    res: express.Response
+  ): Promise<express.Response> => {
+    const { id } = req.params;
+    const { reminderTime }: { reminderTime: Date } = req.body;
+    if (!id || !reminderTime) {
+      return res
+        .status(400)
+        .json({ error: "Todo ID and Reminder Time are required." });
+    }
+    const updateReminderOfTodos = await Todos.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          remiderTime: new Date(reminderTime),
+        },
+      },
+      {
+        new: true,
+      }
+    );
+    if (updateReminderOfTodos) {
+      return res.status(200).json({
+        message: "Reminder set successfully.",
+        data: updateReminderOfTodos,
+        error: null,
+        status: 200,
+      });
+    } else {
+      return res.status(500).json({
+        error: "Reminder not set.",
+        data: null,
+        message: null,
+        status: 500,
+      });
+    }
+  }
+);
+
+const sendReminders = async () => {
+  try {
+    const now = new Date();
+    const reminders = await Todos.aggregate([
+      {
+        $match: {
+          reminderTime: {
+            $gte: new Date(now.getTime() - 60000), //Reminder time is greater than or equal to 1 minute ago
+            $lt: now, //Reminder time is less than the current time
+          }, // Check whether the reminder time is
+          status: "pending",
+        },
+      },
+      {
+        $lookup: {
+          from: "users", // Ensure this matches your MongoDB collection name
+          foreignField: "_id",
+          localField: "createdFor",
+          as: "UserDetails",
+        },
+      },
+      {
+        $addFields: {
+          userDetails: { $first: "$UserDetails" }, // Get the first user object
+        },
+      },
+    ]);
+
+    for (const todo of reminders) {
+      if (todo.userDetails && todo.userDetails.email) {
+        await sendEmailReminder(
+          todo.userDetails.email,
+          "Reminder: Upcoming Todo Task",
+          `Hey ${todo.userDetails.fullName}, your task "${todo.title}" is due soon!`
+        );
+        console.log(`Reminder email sent to ${todo.userDetails.email}`);
+      }
+    }
+  } catch (error) {
+    console.error("Error sending reminders:", error);
+  }
+};
+
+// Schedule job to run every 2 minute
+cron.schedule("*/2 * * * *", async () => {
+  console.log(" Checking for tasks with reminder times...");
+  await sendReminders();
+});
