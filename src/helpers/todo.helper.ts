@@ -1,4 +1,4 @@
-export interface AddTodosBody {
+export interface TodosBody {
   title: string;
   description: string;
   status: string;

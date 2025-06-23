@@ -6,6 +6,9 @@ import commentRoutes from "./comment.routes";
 import categoryRoute from "./category.routes";
 import productRoute from "./product.routes";
 import cartRoute from "./cart.routes";
+import transactionRoute from "./transaction.route";
+import budgetRoute from "./budget.routes";
+import subCommentRouter from "./subcomment.route";
 
 const indexRoutes = express.Router();
 indexRoutes.use("/api/v1/auth", authRoutes);
@@ -15,6 +18,9 @@ indexRoutes.use("/api/v1/comments", commentRoutes);
 indexRoutes.use("/api/v1/category", categoryRoute);
 indexRoutes.use("/api/v1/product", productRoute);
 indexRoutes.use("/api/v1/carts", cartRoute);
+indexRoutes.use("/api/v1/transactions", transactionRoute);
+indexRoutes.use("/api/v1/budget", budgetRoute);
+indexRoutes.use("/api/v1/sub-comments", subCommentRouter);
 indexRoutes.get(
   "/api/v1",
   (req: express.Request, res: express.Response, next: express.NextFunction) => {
