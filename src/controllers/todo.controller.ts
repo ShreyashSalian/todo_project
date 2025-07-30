@@ -1,4 +1,5 @@
 import express from "express";
+import { redisClient } from "../utils/redis";
 
 import {
   allowedFieldsByRole,
@@ -68,6 +69,8 @@ export const getAllTodos = asyncHandler(
       const sortOrder = req.body.sortOrder === "asc" ? 1 : -1;
       const search = req.body.search;
 
+      const redisKey = `todos:${user}:page:${page}:limit:${limit}`;
+
       const searchFilter = search
         ? {
             $or: [
@@ -87,6 +90,12 @@ export const getAllTodos = asyncHandler(
           : { assignedTo: userDetail?._id }),
         ...searchFilter,
       };
+
+      const cachedData = await redisClient.get(redisKey);
+      if (cachedData) {
+        const parsedData = JSON.parse(cachedData);
+        return sendSuccess(res, 200, "Todo list", parsedData);
+      }
 
       const todoDetails = await Todos.aggregate([
         {
@@ -221,7 +230,7 @@ export const getAllTodos = asyncHandler(
       if (todoDetails.length === 0) {
         return sendError(res, 404, "No todo found");
       } else {
-        return sendSuccess(res, 200, "Todo list", {
+        const result = {
           data: todoDetails,
           pagination: {
             total: totalTodosDocuments,
@@ -229,7 +238,11 @@ export const getAllTodos = asyncHandler(
             limit,
             totalPage: Math.ceil(totalTodosDocuments / limit),
           },
-        });
+        };
+
+        await redisClient.setEx(redisKey, 3600, JSON.stringify(result));
+
+        return sendSuccess(res, 200, "Todo list", result);
       }
     } catch (err: any) {
       console.log(err);

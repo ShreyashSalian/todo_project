@@ -7,7 +7,7 @@ export const addNewUser = asyncHandler(
     req: express.Request,
     res: express.Response
   ): Promise<express.Response> => {
-    const customReq = req as RequestWithFile;
+    // const customReq = req as RequestWithFile;
     const {
       email,
       userName,
@@ -20,7 +20,7 @@ export const addNewUser = asyncHandler(
       password: string;
       contactNumber: string;
       fullName: string;
-    } = customReq.body;
+    } = req.body;
 
     const checkUserExists = await User.findOne({
       $or: [
@@ -40,7 +40,7 @@ export const addNewUser = asyncHandler(
         error: "User already exists with the given email or contact number",
       });
     }
-    const profileImage = customReq?.file?.filename || "";
+    // const profileImage = customReq?.file?.filename || "";
     const userCreation = await User.create({
       fullName,
       email,
@@ -48,7 +48,7 @@ export const addNewUser = asyncHandler(
       contactNumber,
       userName,
       role: "user",
-      profileImage: profileImage,
+      // profileImage: profileImage,
       isEmailVerified: true,
     });
     const createdUser = await User.findById(userCreation?._id).select(
